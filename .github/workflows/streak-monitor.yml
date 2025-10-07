@@ -2,7 +2,7 @@ name: GitHub Streak Monitor
 
 on:
   schedule:
-    - cron: "0 6,18 * * *"   # 06:00 & 18:00 UTC daily
+    - cron: "0 6,18 * * *"  # 06:00 & 18:00 UTC
   workflow_dispatch: {}
 
 jobs:
@@ -19,15 +19,29 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Show workspace (sanity check)
+        run: |
+          pwd
+          ls -la
+          echo "---"
+          ls -la src || true
+
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
 
-      - name: Install deps
+      - name: Validate requirements file
+        run: |
+          test -f requirements.txt || (echo "requirements.txt missing at repo root" && exit 1)
+          cat requirements.txt
+
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          python -m pip install -r requirements.txt
+          python -m pip list | grep -E 'requests|python-dotenv' || true
 
       - name: Run monitor
         run: |
