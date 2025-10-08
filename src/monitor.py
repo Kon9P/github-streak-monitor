@@ -1,3 +1,6 @@
+#!/usr/bin/env python3
+"""GitHub Streak Monitor - Discord bot for monitoring GitHub contribution streaks."""
+
 import os
 import sys
 import json
@@ -8,15 +11,18 @@ from typing import Any, Dict, Optional, Tuple, List
 
 import requests
 from dotenv import load_dotenv
-
 import random
 
-# ---------- Meme message lists (short; under 2 lines) ----------
+# =============================================================================
+# MESSAGE TEMPLATES
+# =============================================================================
+# Meme message lists (short; under 2 lines) for Discord notifications
 
 def _plural(n: int, one: str, many: str) -> str:
+    """Return singular or plural form based on count."""
     return one if n == 1 else many
 
-# For when Kong MISSES 1+ days (angry, spicy, slightly guilty-inducing)
+# Messages for when Kong MISSES 1+ days (angry, spicy, slightly guilty-inducing)
 MESSAGES_MISSED = [
     "KONG. {d} {_dunit} off? Hell no—get back in the repo. 😤🔥",
     "You ghosted your streak for {d} {_dunit}? Damn. Commit now. 💀",
@@ -34,7 +40,7 @@ MESSAGES_MISSED = [
     "Hell no. {d} {_dunit} blackout? Git back in there. 🪓",
 ]
 
-# For when Kong MISSES 0 days (cocky, flirty, teasing motivation)
+# Messages for when Kong MISSES 0 days (cocky, flirty, teasing motivation)
 MESSAGES_ACTIVE = [
     "Still hot, still shipping. Don’t you dare cool off. 😎🔥",
     "Commit king behavior. Keep flexing or else. 💅",
@@ -49,6 +55,7 @@ MESSAGES_ACTIVE = [
 ]
 
 def pick_meme(days_missed: int) -> str:
+    """Select meme message based on days missed."""
     if days_missed > 0:
         dunit = _plural(days_missed, "day", "days")
         msg = random.choice(MESSAGES_MISSED)
@@ -57,36 +64,41 @@ def pick_meme(days_missed: int) -> str:
         return random.choice(MESSAGES_ACTIVE)
 
 
-# ---- Utilities ----
+# =============================================================================
+# UTILITY FUNCTIONS
+# =============================================================================
 
 def log(msg: str) -> None:
+    """Log message with UTC timestamp."""
     ts = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
     print(f"[{ts}] {msg}", flush=True)
 
 def env(name: str, default: Optional[str] = None) -> Optional[str]:
+    """Get environment variable with fallback to default."""
     v = os.getenv(name)
     return v if v is not None and v != "" else default
 
 def iso_to_date(d: str) -> date:
-    # Accept YYYY-MM-DD exactly.
+    """Convert ISO date string to date object."""
     return date.fromisoformat(d)
 
 def today_utc() -> date:
+    """Get current UTC date."""
     return datetime.now(timezone.utc).date()
 
 def get_http_timeout() -> int:
+    """Get HTTP timeout from environment (default: 15)."""
     try:
         return int(env("HTTP_TIMEOUT_SECONDS", "15"))
     except Exception:
         return 15
 
-# ---- Core fetching & posting with retry ----
+# =============================================================================
+# CORE API FUNCTIONS WITH RETRY LOGIC
+# =============================================================================
 
 def fetch_with_retry(url: str, timeout: int) -> Any:
-    """
-    Fetch JSON from the streak API with 1 retry after 5 minutes on failure.
-    Returns parsed JSON or raises after final attempt.
-    """
+    """Fetch JSON from streak API with 1 retry after 5 minutes on failure."""
     attempts = 0
     last_exc = None
     while attempts < 2:
@@ -95,7 +107,7 @@ def fetch_with_retry(url: str, timeout: int) -> Any:
             log(f"Fetching streak stats (attempt {attempts}) …")
             r = requests.get(url, timeout=timeout)
             ok = 200 <= r.status_code < 300
-            # Validation line (1–2 lines)
+            # Log API response status
             log(f"Validation: streak API HTTP {r.status_code}; {'OK' if ok else 'NOT OK'}")
             if not ok:
                 raise RuntimeError(f"Streak API returned HTTP {r.status_code}: {r.text[:300]}")
@@ -113,26 +125,24 @@ def fetch_with_retry(url: str, timeout: int) -> Any:
     raise last_exc
 
 def post_discord_with_retry(webhook_url: str, payload: Dict[str, Any], timeout: int) -> None:
-    """
-    Post to Discord with 1 retry after 5 minutes on failure.
-    """
+    """Post to Discord with 1 retry after 5 minutes on failure."""
     attempts = 0
     last_exc = None
     while attempts < 2:
         attempts += 1
         try:
-            # State purpose & minimal inputs BEFORE sending
+            # Log notification details
             sample = {
                 "purpose": "streak_break_warning",
                 "inputs": {
-                    "lastActive": payload.get("content", "")[:200],  # logged within content lines
+                    "lastActive": payload.get("content", "")[:200],
                 }
             }
             log(f"Preparing Discord notification: {json.dumps(sample)[:240]}")
 
             r = requests.post(webhook_url, json=payload, timeout=timeout)
             ok = 200 <= r.status_code < 300
-            # Validation line (1–2 lines)
+            # Log Discord response status
             log(f"Validation: Discord HTTP {r.status_code}; {'delivered' if ok else 'failed'}")
             if not ok:
                 raise RuntimeError(f"Discord returned HTTP {r.status_code}: {r.text[:300]}")
@@ -146,15 +156,12 @@ def post_discord_with_retry(webhook_url: str, payload: Dict[str, Any], timeout: 
     assert last_exc is not None
     raise last_exc
 
-# ---- Domain logic ----
+# =============================================================================
+# BUSINESS LOGIC FUNCTIONS
+# =============================================================================
 
 def normalize_stats(raw: Any) -> Dict[str, Any]:
-    """
-    Accepts:
-      - A list with one object
-      - Or a single object
-    Ensures required fields exist. Returns normalized dict.
-    """
+    """Normalize and validate streak statistics from API response."""
     obj = None
     if isinstance(raw, list) and raw:
         obj = raw[0]
@@ -168,7 +175,7 @@ def normalize_stats(raw: Any) -> Dict[str, Any]:
         if k not in obj:
             raise ValueError(f"Missing key: {k}")
 
-    # Basic field checks
+    # Validate streak objects
     cs = obj["currentStreak"]
     ls = obj["longestStreak"]
     for streak_key, thing in [("currentStreak", cs), ("longestStreak", ls)]:
@@ -178,18 +185,19 @@ def normalize_stats(raw: Any) -> Dict[str, Any]:
             if sub not in thing:
                 raise ValueError(f"Missing key: {streak_key}.{sub}")
 
-    # Validation line (1–2 lines)
+    # Log parsed fields
     log(f"Validation: parsed fields: total={obj['totalContributions']}, currentStreak.days={obj['currentStreak']['days']}")
     return obj
 
 def compute_days_missed(last_active_str: str) -> Tuple[int, date]:
+    """Calculate days since last activity (always >= 0)."""
     last_active_dt = iso_to_date(last_active_str)
     today = today_utc()
     delta_days = (today - last_active_dt).days
     return (max(0, delta_days), last_active_dt)
 
 def build_warning_content(last_active: date, streak_length_days: int, days_missed: int) -> str:
-    # Plain text payload
+    """Build plain text warning message for streak break."""
     lines = [
         "Warning: Your GitHub streak has ended!",
         f"- Last active (UTC): {last_active.isoformat()}",
@@ -199,6 +207,7 @@ def build_warning_content(last_active: date, streak_length_days: int, days_misse
     return "\n".join(lines)
 
 def notify_secondary(message: str, timeout: int) -> None:
+    """Send secondary error notification if webhook configured."""
     hook = env("SECONDARY_ERROR_WEBHOOK")
     if not hook:
         return
@@ -208,21 +217,21 @@ def notify_secondary(message: str, timeout: int) -> None:
         log(f"Secondary notification failed: {e}")
 
 def build_discord_message(last_active: date, streak_length_days: int, days_missed: int, is_warning: bool) -> str:
-    # line 1: spicy meme (depends on missed or not)
+    """Build Discord message with meme and streak details."""
+    # Spicy meme + streak details
     line1 = pick_meme(days_missed)
-    # line 2: compact details (kept under 2 lines total; includes the required fields when warning)
     if is_warning:
-        # Explicitly say it's a warning and include last active, streak days, and days missed.
         line2 = f"⚠️ Warning — Last: {last_active.isoformat()} | Streak: {streak_length_days}d | Missed: {days_missed}d"
     else:
-        # Optional hype line when not missed (only sent if ALWAYS_NOTIFY_ACTIVE=1)
         line2 = f"✅ Streak alive — Last: {last_active.isoformat()} | Streak: {streak_length_days}d | Missed: 0d"
     return f"{line1}\n{line2}"
 
 
 def main() -> int:
+    """Monitor GitHub streak and send Discord notifications."""
     load_dotenv(override=False)
 
+    # Load config
     endpoint = env("STREAK_API_ENDPOINT", "https://api.franznkemaka.com/github-streak/stats/kongesque")
     webhook = env("DISCORD_WEBHOOK_URL")
     timeout = get_http_timeout()
@@ -236,20 +245,21 @@ def main() -> int:
         raw = fetch_with_retry(endpoint, timeout)
         stats = normalize_stats(raw)
 
-        # Business rules
+        # Process streak data
         last_active_str = stats["currentStreak"]["end"]
         streak_len_days = int(stats["currentStreak"]["days"])
         days_missed, last_active = compute_days_missed(last_active_str)
 
         log(f"Computed daysMissed={days_missed} from today={today_utc().isoformat()} and lastActive={last_active.isoformat()}.")
 
+        # Send notifications
         if days_missed > 0:
-            # Streak is broken → send spicy warning + required details
+            # Streak broken → send warning
             content = build_discord_message(last_active, streak_len_days, days_missed, is_warning=True)
             payload = {"content": content}
             post_discord_with_retry(webhook, payload, timeout)
         else:
-            # Optional: send hype/tease even when active (opt-in)
+            # Optional hype for active streaks
             always_notify = env("ALWAYS_NOTIFY_ACTIVE", "0") == "1"
             if always_notify:
                 content = build_discord_message(last_active, streak_len_days, days_missed, is_warning=False)
@@ -263,6 +273,7 @@ def main() -> int:
         return 0
 
     except Exception as e:
+        # Log error and notify secondary
         log("FATAL: job failed after retry.")
         log("Traceback:\n" + "".join(traceback.format_exception(e)))
         notify_secondary(f"Streak monitor failed: {e}", timeout)
